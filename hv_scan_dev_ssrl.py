@@ -96,36 +96,46 @@ def load_ssrl_52_photonEscan(filename):
     return aligned_photonE_scan
 
 
-def bz_xz(aa, cc, nn):  # BZ in GKA plane
-    gk = (4 * np.pi) / (3 * aa)
-    ga = np.pi / cc
-    g_vec = nn * 2 * np.pi / cc
-    m1 = [gk, ga + g_vec]
-    m2 = [-gk, ga + g_vec]
-    m3 = [-gk, -ga + g_vec]
-    m4 = [gk, -ga + g_vec]
-    m5 = [gk, ga + g_vec]
-    xx = [m1[0], m2[0], m3[0], m4[0], m5[0]]
-    yy = [m1[1], m2[1], m3[1], m4[1], m5[1]]
-    points = [xx, yy]
-    return points
+def np_transpose(xar, tr):
+    """Transpose the RegularSpacedData
+    :param xar: starting xarray
+    :param tr: list of the new transposed order
+    """
+    coords = {}
+    dims = []
+    for i in tr:
+        name = list(xar.coords)[i]
+        coords[name] = xar[name].values
+        dims.append(list(xar.dims)[i])
+    return xr.DataArray(np.transpose(xar.data, tr), dims=dims, coords=coords)
 
 
-def bz_wedge_xz(aa, cc, nn):
-    gk = (4 * np.pi) / (3 * aa)
-    ga = np.pi / cc
-    g_vec = nn * 2 * np.pi / cc
-    a = [0, ga + g_vec]
-    h = [gk, ga + g_vec]
-    k = [gk, 0 + g_vec]
-    g = [0, 0 + g_vec]
-    xx = [g[0], k[0], h[0], a[0]]
-    yy = [g[1], k[1], h[1], a[1]]
-    points = [xx, yy]
-    return points
+def fix_array(ar, scan_type):
+    """
+    make your array uniform based on what type of scan it is
+    :param ar: input xarray
+    :param scan_type: the scan type can be "hv_scan"
+    :return: the fixed array
+    """
+    if scan_type == "hv_scan":
+        photon_energy = ar.photon_energy.values
+        slit = ar.slit.values
+        energy = ar.energy.values
+        size_new = [len(photon_energy), len(slit), len(energy)]
+        size_ar = list(ar.values.shape)
+        tr = [size_ar.index(i) for i in size_new]
+        print(size_new, size_ar, tr)
+        return np_transpose(ar, tr)
 
 
 def k_forward_normal(ke, theta, v0):
+    """
+    convert to kx and kz
+    :param ke: kinetic energy data
+    :param theta: what slit angle to convert at
+    :param v0: inner potential
+    :return: kx, kz
+    """
     rad = math.radians(theta)
     kx = 0.512 * np.sqrt(ke) * np.sin(rad)
     kz = 0.512 * np.sqrt(ke * (np.cos(rad))**2 + v0)
@@ -133,12 +143,27 @@ def k_forward_normal(ke, theta, v0):
 
 
 def k_forward_normal_partial(ke, theta):
+    """
+    convert to kx
+    :param ke: kinetic energy data
+    :param theta: what slit angle to convert at
+    :return:
+    """
     rad = math.radians(theta)
     kx = 0.512 * np.sqrt(ke) * np.sin(rad)
     return kx
 
 
 def k_reverse_normal(kx, kz, v0, wf, be):
+    """
+    convert back to real space
+    :param kx:
+    :param kz:
+    :param v0:
+    :param wf:
+    :param be:
+    :return:
+    """
     a = 0.512
     ke = (kz/a)**2 + (kx/a)**2 - v0
     theta = (180/np.pi) * np.arcsin(kx/(a*np.sqrt(ke)))
@@ -147,6 +172,14 @@ def k_reverse_normal(kx, kz, v0, wf, be):
 
 
 def k_reverse_normal_partial(kx, hv, be, wf):
+    """
+    convert back to real space
+    :param kx:
+    :param hv:
+    :param be:
+    :param wf:
+    :return:
+    """
     a = 0.512
     ke = hv + be - wf
     theta = (180 / np.pi) * np.arcsin(kx / (a * np.sqrt(ke)))
@@ -167,14 +200,14 @@ def my_dewarp(spectra, ef_pos):
     de = spectra.coords['energy'].values[1] - spectra.coords['energy'].values[0]
     px_to_remove = int(round((ef_max - ef_min) / de))
     dewarped = np.empty((spectra.coords['slit'].size, spectra.coords['energy'].size - px_to_remove))
-    #  print(spectra.coords['slit'].size)
     for i in range(spectra.coords['slit'].size):
         rm_from_bottom = int(round((ef_pos[i] - ef_min) / de))
         rm_from_top = spectra.coords['energy'].size - (px_to_remove - rm_from_bottom)
         dewarped[i, :] = spectra.values[i, rm_from_bottom:rm_from_top]
     bottom_energy_offset = int(round((ef_max - ef_min) / de))
     energy = spectra.coords['energy'].values[bottom_energy_offset:]
-    dw_data= xr.DataArray(dewarped, coords={'energy': energy, 'slit': spectra.coords['slit'].values},dims=['slit','energy'], attrs=spectra.attrs)
+    dw_data = xr.DataArray(dewarped, coords={'energy': energy, 'slit': spectra.coords['slit'].values},
+                           dims=['slit', 'energy'], attrs=spectra.attrs)
     dw_new_ef = dw_data['energy'] - ef_max
     dw_data = dw_data.assign_coords({'energy': dw_new_ef})
     return dw_data
@@ -184,10 +217,10 @@ def normalize_hvscan(hvscan, x0, x1, e0, e1):
     """
     break hvscan into each photon energy and normalize to integrate intensity
     :param hvscan:
-    :param x0:
-    :param x1:
-    :param e0:
-    :param e1:
+    :param x0: lower slit position
+    :param x1: upper slit position
+    :param e0: lower energy range
+    :param e1: upper energy range
     :return:
     """
     hv_cuts = []
@@ -203,6 +236,7 @@ def normalize_hvscan(hvscan, x0, x1, e0, e1):
 
     hv_scan_normed = xr.concat(hv_cuts, 'photon_energy')
     hv_scan_normed = hv_scan_normed.assign_coords({'photon_energy': hvscan['photon_energy']})
+    hv_scan_normed = fix_array(hv_scan_normed, scan_type="hv_scan")
     return hv_scan_normed
 
 
@@ -233,14 +267,9 @@ def dewarp_2d(spectrum_2d, e0, e1, x1, x2, ds, de, fermi_model, fermi_params, r2
     ef_downsample = []
     ef_sigma = []
     i = 0
-    #print('spectrum slit: ', angle_ds, 'spectrum energy: ', ene_ds, 'initial params: ',
-    #      init_params)
     for theta in angle_downsample:
-        #print(theta)
         edc_xr = spectrum_2d_crop_downsample.sel({'slit': theta}, method='nearest')
         edc_vals = edc_xr.values
-        edc = xr.DataArray(edc_vals, coords={'energy': edc_xr['energy'].values}, dims=['energy'])
-        #run_edc_plot(edc)
         fit_result = fermi_model.fit(edc_vals, fermi_params, x=ene_downsample)
         fermi_params = fit_result.params
         ef_value = fermi_params['fermi_center'].value
@@ -258,13 +287,12 @@ def dewarp_2d(spectrum_2d, e0, e1, x1, x2, ds, de, fermi_model, fermi_params, r2
         ef_downsample.append(ef_value)
         ef_sigma.append(ef_error)
 
-    if (i < 5):
+    if i < 5:
         print('i was less than 5')
         ef_downsample = []
         ef_sigma = []
         for theta in angle_downsample:
             edc_xr = spectrum_2d_crop_downsample.sel({'slit': theta}, method='nearest')
-            edc = edc_xr.values
             ef_value = edc_xr.arpes.guess_ef()
             ef_downsample.append(ef_value)
             ef_sigma.append(1)
@@ -275,28 +303,31 @@ def dewarp_2d(spectrum_2d, e0, e1, x1, x2, ds, de, fermi_model, fermi_params, r2
     ww = 1.0 / ((np.array(ef_sigma)) ** 2)
     p = np.polyfit(aa[clean_ef], ee[clean_ef], 2, w=ww)
     dw_curve = np.poly1d(p)
-    # dw_curve= arpys.Arpes.make_dewarp_curve(aa[clean_ef], ee[clean_ef])##modify this to add weights to the fit error bars
+    # dw_curve= arpys.Arpes.make_dewarp_curve(aa[clean_ef], ee[clean_ef])
+    # modify this to add weights to the fit error bars
     ef = dw_curve(angle.values)
     spectrum_2d_dw = my_dewarp(spectrum_2d, ef)
     return (spectrum_2d_dw, angle_downsample, ef_downsample, ef,
             spectrum_2d_crop_downsample, ef_sigma)
 
 
-def standardize(xr_data):
+def standardize(ar):
     """
     Makes the spectra intensities between 0 and 1
-    :param xr_data:
-    :return:
+    :param ar: xarray with data
+    :return: xarray standardized to between 0 and 1
     """
-    data_values = xr_data.values
+    data_values = ar.values
     w_max = np.nanmax(data_values)
     w_min = np.nanmin(data_values)
-    nr_values = (xr_data.values - w_min) / (w_max - w_min)
-    slit = xr_data['slit'].values
-    energy = xr_data['energy'].values
-    photon_energy = xr_data['photon_energy'].values
-    n = xr.DataArray(nr_values, coords={'photon_energy': photon_energy, 'energy': energy, 'slit': slit},
-                     dims=['photon_energy', 'energy', 'slit'])
+    nr_values = (ar.values - w_min) / (w_max - w_min)
+    slit = ar.slit.values
+    energy = ar.energy.values
+    photon_energy = ar.photon_energy.values
+    n = xr.DataArray(nr_values, dims=('photon_energy', 'slit', 'energy'),
+                     coords={'photon_energy': photon_energy, 'slit': slit, 'energy': energy})
+    #n = xr.DataArray(nr_values, coords={'photon_energy': photon_energy, 'energy': energy, 'slit': slit},
+    #                 dims=['photon_energy', 'energy', 'slit'])
     return n
 
 
@@ -326,11 +357,9 @@ def generate_fit(edc, window_min, window_max):
     params_['constant_c'].set(value=0.002, max=100)
 
     full_model = linear_back * fermi_func + constant
-
     window = edc.sel({'energy': slice(window_min, window_max)})
     energies = window.energy.values
-    dos = window.values
-
+    # dos = window.values
     init = full_model.eval(params_, x=energies)
     out_ = full_model.fit(init, params_, x=energies)
     params_ = out_.params
@@ -358,38 +387,66 @@ def ef_guess_for_edc(scan, e0, e1, dx, ne):
     return ef_guess
 
 
-def find_spacing(ke, slit, inner_potential):
-    middle_ke = int(len(ke)/2)
-    middle_slit = int(len(slit) / 2)
-    kx_ur, kz_ur = k_forward_normal(ke[middle_ke],
-                                    slit[middle_slit], inner_potential)
-    kx_ll, kz_ll = k_forward_normal(ke[middle_ke-1],
-                                    slit[middle_slit-1], inner_potential)
-    dkx = kx_ur - kx_ll
-    dkz = kz_ur - kz_ll
-    return dkx, dkz
+def find_spacing(mm, hv, ke, slit, inner_potential=14, num_x=None, num_z=None, partial=False):
+    if partial:
+        if num_x is None:
+            middle_ke = int(len(ke) / 2)
+            middle_slit = int(len(slit) / 2)
+            kx_ur = k_forward_normal_partial(ke[middle_ke], slit[middle_slit])
+            kx_ll = k_forward_normal_partial(ke[middle_ke - 1], slit[middle_slit - 1])
+            dkx = kx_ur - kx_ll
+            num_x = abs(int((mm[1] - mm[0]) / dkx))
+            print(num_x, len(slit))
+            return num_x
+        else:
+            return num_x
+    elif not partial:
+        if num_x is None and num_z is None:
+            middle_ke = int(len(ke) / 2)
+            middle_slit = int(len(slit) / 2)
+            kx_ur, kz_ur = k_forward_normal(ke[middle_ke],
+                                            slit[middle_slit], inner_potential)
+            kx_ll, kz_ll = k_forward_normal(ke[middle_ke - 1],
+                                            slit[middle_slit - 1], inner_potential)
+            dkx = kx_ur - kx_ll
+            dkz = kz_ur - kz_ll
+            print("\n\n\nThese are the spacing: ", dkx, dkz)
+            num_x = abs(int((mm[0][1] - mm[0][0]) / dkx))
+            num_z = abs(int((mm[1][1] - mm[1][0]) / dkz))
+            print(num_x, num_z, len(slit), len(hv))
+        elif num_x or num_z:
+            if num_x is None:
+                num_x = slit.size
+            elif num_z is None:
+                num_z = hv.size
+        else:
+            print("There is something wrong in choosing your "
+                  "spacing for reg grid kz conversion")
+    return num_x, num_z
 
 
-def convert_2d_normal_emission(scans, be=0, num_x=None, num_z=None):
+def convert_2d_normal_emission(scans, be=0, inner_potential=14, wf=4.2, num_x=None, num_z=None):
     """
-    :param scans:
-    :param be:
-    :param num_x:
-    :param num_z:
-    :return:
+    :param scans: xarray of the photon energy scan
+    :param be: binding energy to select to look at a kz cut
+    :param inner_potential: inner potential
+    :param wf: work function
+    :param num_x: number of points to interpolate in the x direction, setting
+                  to None means it will do a kz conversion to find the spacing
+    :param num_z: number of points to interpolate in the z direction, setting
+                  to None means it will do a kz conversion to find the spacing
+    :return: xarray with an iso-energy cut kz converted
     """
-    wf = 4.2
-    inner_potential = 14
-    iso_energy = scans.sel({"energy": be}, method='nearest')
-    photon_energy = iso_energy['photon_energy'].values
-    slit = iso_energy['slit'].values
-    ke = photon_energy - wf + be
+    energy_iso = scans.sel({"energy": be}, method='nearest')
+    photon_energy_iso = energy_iso['photon_energy'].values
+    slit = energy_iso['slit'].values
+    ke = photon_energy_iso - wf + be
     print("\nlsdjfpsodjf: ", scans.attrs, "\nfinally youre here: ", scans.coords,
           "\nthis is the data: ", scans.data, "\nthis is the dims: ",
-          scans.dims, "\nphoton energy values: ", iso_energy['photon_energy'].values,
-          '\nbinding energy 0: ', iso_energy, '\nke: ', ke, '\nslit: ', slit)
-    interp_object = RegularGridInterpolator((photon_energy, slit),
-                                            iso_energy.values, bounds_error=False)
+          scans.dims, "\nphoton energy values: ", energy_iso['photon_energy'].values,
+          '\nbinding energy 0: ', energy_iso, '\nke: ', ke, '\nslit: ', slit)
+    interp_object = RegularGridInterpolator((photon_energy_iso, slit),
+                                            energy_iso.values, bounds_error=False)
     kx_ur, kz_ur = k_forward_normal(np.nanmax(ke),
                                     np.nanmax(slit), inner_potential)
     kx_ul, kz_ul = k_forward_normal(np.nanmax(ke),
@@ -406,31 +463,11 @@ def convert_2d_normal_emission(scans, be=0, num_x=None, num_z=None):
     max_x = max(xx)
     min_z = min(zz)
     max_z = max(zz)
-    print("\n\n\nThese are the points: ", kx_ur, kz_ur, kx_ul, kz_ul, kx_um, kz_um, kx_lr, kz_lr, kx_ll, kz_ll)
-    if not num_x and not num_x:
-        dkx, dkz = find_spacing(ke, slit, inner_potential)
-        print("\n\n\nThese are the spacing: ", dkx, dkz)
-        num_x = abs(int((max_x - min_x)/dkx))
-        num_z = abs(int((max_z - min_z)/dkz))
-        print('\n\nnumber spacing: ', num_x, num_z, slit.size, photon_energy.size)
-    elif num_x or num_z:
-        if not num_x:
-            num_x = slit.size
-        elif not num_z:
-            num_z = photon_energy.size
-    else:
-        print("There is something wrong in choosing your "
-              "spacing for reg grid kz conversion")
-    # linspace returns evenly spaced numbers over a specified interval
-    # what's the point of sorting here? Sort is used to sort numbers but
-    # won't linspace return them already sorted?
-
+    mm = [[min_x, max_x], [min_z, max_z]]
+    num_x, num_z = find_spacing(mm, photon_energy_iso, ke, slit, inner_potential, num_x, num_z, partial=False)
+    print('\n\nnumber spacing: ', num_x, num_z, slit.size, photon_energy_iso.size)
     kx_new = np.sort(np.linspace(min_x, max_x, num=num_x, endpoint=True))
     kz_new = np.sort(np.linspace(min_z, max_z, num=num_z, endpoint=True))
-    #ke_new = np.linspace(np.nanmin(ke), np.nanmax(ke),
-    #                     num=photon_energy.size, endpoint=True)
-    #ke_grid, kxx, kzz = np.meshgrid(ke, kx_new, kz_new, indexing='ij', sparse=False)
-    #theta, hv = k_reverse_normal(ke_grid, kxx, kzz, inner_potential, wf, be)
     kxx, kzz = np.meshgrid(kx_new, kz_new, indexing='ij', sparse=False)
     hv, theta = k_reverse_normal(kxx, kzz, inner_potential, wf, be)
     points_stacked = np.stack((hv.reshape(-1, order='C'), theta.reshape(-1, order='C')))
@@ -439,21 +476,20 @@ def convert_2d_normal_emission(scans, be=0, num_x=None, num_z=None):
     return xr.DataArray(interp_out, dims=['kx', 'kz'], coords={'kx': kx_new, 'kz': kz_new})
 
 
-def convert_3d_normal_emission(scans, inner_potential=14, num_x=None, num_z=None):
+def convert_3d_normal_emission(scans, inner_potential=14, wf=4.2, num_x=None, num_z=None):
     """
-    :param scans:
-    :param inner_potential
-    :param num_x:
-    :param num_z:
-    :return:
+    :param scans: xarray of the photon energy scan
+    :param inner_potential: inner potential
+    :param wf: work function
+    :param num_x: number of points to interpolate in the x direction, setting
+                  to None means it will do a kz conversion to find the spacing
+    :param num_z: number of points to interpolate in the z direction, setting
+                  to None means it will do a kz conversion to find the spacing
+    :return: xarray with an iso-energy cut kz converted
     """
-    wf = 4.2
     binding_energy = scans.energy.values
     photon_energy = scans.photon_energy.values
     slit = scans.slit.values
-    scans = xr.DataArray(scans.values, dims=['photon_energy', 'slit', 'energy'],
-                         coords={'photon_energy': photon_energy,
-                                 'slit': slit, 'energy': binding_energy})
     max_ke1 = np.nanmax(photon_energy) - wf + np.nanmax(binding_energy)
     max_ke2 = np.nanmin(photon_energy) - wf + np.nanmax(binding_energy)
     min_ke = np.nanmin(photon_energy) - wf + np.nanmin(binding_energy)
@@ -483,35 +519,18 @@ def convert_3d_normal_emission(scans, inner_potential=14, num_x=None, num_z=None
     max_x = max(xx)
     min_z = min(zz)
     max_z = max(zz)
-    print("\n\n\nThese are the points: ", kx_ur, kz_ur, kx_ul, kz_ul, kx_um, kz_um, kx_lr_maxke, kz_lr_maxke,
-          kx_ll_maxke, kz_ll_maxke, kx_lr_minke, kz_lr_minke, kx_ll_minke, kz_ll_minke, "\n\nMins and Maxs: ",
-          min_x, max_x, min_z, max_z)
-    if not num_x and not num_x:
-        be = np.nanmax(binding_energy)
-        iso_energy = scans.sel({"energy": be}, method='nearest')
-        photon_energy = iso_energy['photon_energy'].values
-        ke = photon_energy - wf - be
-        dkx, dkz = find_spacing(ke, slit, inner_potential)
-        print("\n\n\nThese are the spacing: ", dkx, dkz)
-        num_x = abs(int((max_x - min_x)/dkx))
-        num_z = abs(int((max_z - min_z)/dkz))
-        print('\n\nnumber spacing: ', num_x, num_z, slit.size, photon_energy.size)
-    elif num_x or num_z:
-        if not num_x:
-            num_x = slit.size
-        elif not num_z:
-            num_z = photon_energy.size
-    else:
-        print("There is something wrong in choosing your "
-              "spacing for reg grid kz conversion")
+    mm = [[min_x, max_x], [min_z, max_z]]
+    be = np.nanmax(binding_energy)
+    energy_iso = scans.sel({"energy": be}, method='nearest')
+    photon_energy_iso = energy_iso['photon_energy'].values
+    ke_iso = photon_energy_iso - wf - be
+    num_x, num_z = find_spacing(mm, photon_energy_iso, ke_iso, slit, inner_potential, num_x, num_z, partial=False)
     kx_new = np.sort(np.linspace(min_x, max_x, num=num_x, endpoint=True))
     kz_new = np.sort(np.linspace(min_z, max_z, num=num_z, endpoint=True))
     be_new = np.sort(np.linspace(np.nanmin(binding_energy), np.nanmax(binding_energy),
                                  num=len(binding_energy), endpoint=True))
     kxx, kzz, be_grid = np.meshgrid(kx_new, kz_new, be_new, indexing='ij', sparse=False)
-    print(be_grid.shape, kxx.shape, kzz.shape)
     hv, theta = k_reverse_normal(kxx, kzz, inner_potential, wf, be_grid)
-    print(theta, hv)
     points_stacked = np.stack((hv.reshape(-1, order='C'), theta.reshape(-1, order='C'),
                               be_grid.reshape(-1, order='C')))
     interp_out = interp_object(points_stacked.T)
@@ -521,28 +540,23 @@ def convert_3d_normal_emission(scans, inner_potential=14, num_x=None, num_z=None
                                                                          'energy': be_new})
 
 
-def convert_partial_3d_normal_emission(scans, inner_potential=14, num_x=None, num_z=None):
+def convert_partial_3d_normal_emission(scans, inner_potential=14, wf=4.2, num_x=None, num_z=None):
     """
-    :param scans:
-    :param inner_potential
-    :param num_x:
-    :param num_z:
-    :return:
+    :param scans: xarray of the photon energy scan
+    :param inner_potential: inner potential
+    :param wf: work function
+    :param num_x: number of points to interpolate in the x direction, setting
+                  to None means it will do a kz conversion to find the spacing
+    :param num_z: number of points to interpolate in the z direction, setting
+                  to None means it will do a kz conversion to find the spacing
+    :return: xarray with an iso-energy cut kz converted
     """
-    wf = 4.2
     binding_energy = scans.energy.values
     photon_energy = scans.photon_energy.values
     slit = scans.slit.values
-    scans = xr.DataArray(scans.values, dims=['photon_energy', 'slit', 'energy'],
-                         coords={'photon_energy': photon_energy,
-                                 'slit': slit, 'energy': binding_energy})
     max_ke1 = np.nanmax(photon_energy) - wf + np.nanmax(binding_energy)
     max_ke2 = np.nanmin(photon_energy) - wf + np.nanmax(binding_energy)
     min_ke = np.nanmin(photon_energy) - wf + np.nanmin(binding_energy)
-    print("\nfinally youre here: ", scans.coords,
-          "\nthis is the data: ", scans, "\nthis is the dims: ",
-          scans.dims, "\nbinding energy values: ", binding_energy.shape, '\nslit: ', slit.shape,
-          "\nscan shape: ", scans.shape, "\nphoton energy: ", photon_energy.shape)
     interp_object = RegularGridInterpolator((photon_energy, slit, binding_energy),
                                             scans.data, bounds_error=False)
     kx_ur = k_forward_normal_partial(max_ke1, np.nanmax(slit))
@@ -555,32 +569,16 @@ def convert_partial_3d_normal_emission(scans, inner_potential=14, num_x=None, nu
     xx = [kx_ur, kx_ul, kx_um, kx_lr_maxke, kx_ll_maxke, kx_lr_minke, kx_ll_minke]
     min_x = min(xx)
     max_x = max(xx)
-    print("\n\n\nThese are the points: ", kx_ur, kx_ul, kx_um, kx_lr_maxke,
-          kx_ll_maxke, kx_lr_minke, kx_ll_minke, "\n\nMins and Maxs: ",
-          min_x, max_x)
-    if not num_x and not num_x:
-        be = np.nanmax(binding_energy)
-        iso_energy = scans.sel({"energy": be}, method='nearest')
-        photon_energy = iso_energy['photon_energy'].values
-        ke = photon_energy - wf - be
-        dkx, dkz = find_spacing(ke, slit, inner_potential)
-        print("\n\n\nThese are the spacing: ", dkx, dkz)
-        num_x = abs(int((max_x - min_x)/dkx))
-        print('\n\nnumber spacing: ', num_x, num_z, slit.size, photon_energy.size)
-    elif num_x or num_z:
-        if not num_x:
-            num_x = slit.size
-        elif not num_z:
-            num_z = photon_energy.size
-    else:
-        print("There is something wrong in choosing your "
-              "spacing for reg grid kz conversion")
+    mm = [min_x, max_x]
+    be = np.nanmax(binding_energy)
+    energy_iso = scans.sel({"energy": be}, method='nearest')
+    photon_energy_iso = energy_iso['photon_energy'].values
+    ke_iso = photon_energy_iso - wf - be
+    num_x = find_spacing(mm, photon_energy_iso, ke_iso, slit, inner_potential, num_x, num_z, partial=True)
     kx_new = np.sort(np.linspace(min_x, max_x, num=num_x, endpoint=True))
     hv, kxx, be = np.meshgrid(photon_energy, kx_new, binding_energy,
-                                    indexing='ij', sparse=False)
-    print(hv.shape, kxx.shape, be.shape)
+                              indexing='ij', sparse=False)
     theta = k_reverse_normal_partial(kxx, hv, be, wf)
-    print(theta, hv)
     points_stacked = np.stack((hv.reshape(-1, order='C'), theta.reshape(-1, order='C'),
                                be.reshape(-1, order='C')))
     interp_out = interp_object(points_stacked.T)
@@ -596,7 +594,6 @@ def run_dewarp(scans, ef_guess, m, p):
     i = 0
     for hv in scans['photon_energy']:
         ef_ini = ef_guess[i]
-        # print('photon energy: ', hv, 'ef guess: ', ef_ini)
         p['fermi_center'].set(value=ef_ini, max=0.15, vary=True)
         im_2d = scans.sel({'photon_energy': hv}, method='nearest')
         im_2d_dw = dewarp_2d(im_2d, ef_ini - 0.12, ef_ini + 0.2, -12, 12, 50, 2, m, p, 0.95)
@@ -608,22 +605,8 @@ def run_dewarp(scans, ef_guess, m, p):
     hv_out = xr.concat(hv_dewarp_interp, 'photon_energy')
     hv_out = hv_out.assign_coords({'photon_energy': scans['photon_energy']})
     hv_out = normalize_hvscan(hv_out, -10, 10, -0.3, 0.1)
+    fix_array(hv_out, scan_type='hv_scan')
     return hv_out
-
-
-def transpose_maybe(xar, tr):
-    """Transpose the RegularSpacedData
-    :param xar: starting xarray
-    :param tr: list of the new transposed order
-    :type xar: xarray
-    """
-    coords = {}
-    dims = []
-    for i in tr:
-        name = list(xar.coords)[i]
-        coords[name] = xar[name].values
-        dims.append(list(xar.dims)[i])
-    return xr.DataArray(np.transpose(xar.data, tr), dims=dims, coords=coords)
 
 
 def run_edc_plot(edc):
@@ -679,38 +662,26 @@ if __name__ == "__main__":
     hv_scan_36 = load_ssrl_52_photonEscan(path3)
     # this number is obtained by determining the offset from
     # zero of the gamma point, normal emission should correspond to 0 deg
-    hv_scan_11 = xr.DataArray(hv_scan_11.values, dims=('photon_energy', 'energy', 'slit'),
-                              coords={'photon_energy': hv_scan_11.photon_energy.values,
-                                      'energy': hv_scan_11.energy.values,
-                                      'slit': hv_scan_11.slit.values})
-    hv_scan_16 = xr.DataArray(hv_scan_16.values, dims=('photon_energy', 'energy', 'slit'),
-                              coords={'photon_energy': hv_scan_16.photon_energy.values,
-                                      'energy': hv_scan_16.energy.values,
-                                      'slit': hv_scan_16.slit.values})
-    hv_scan_36 = xr.DataArray(hv_scan_36.values, dims=('photon_energy', 'energy', 'slit'),
-                              coords={'photon_energy': hv_scan_36.photon_energy.values,
-                                      'energy': hv_scan_36.energy.values,
-                                      'slit': hv_scan_36.slit.values})
-    normed = standardize(hv_scan_36) #hv_scan_13)
+    hv_scan_11 = fix_array(hv_scan_11, scan_type='hv_scan')
+    normed = standardize(hv_scan_11) #hv_scan_13)
     #run_plot(normed)
-    #cut = normed.sel({'photon_energy': 40}, method='nearest')
-    #edc_sum_1 = cut.sel({'energy': slice(-0.07, 0.3)}).sum('slit')
-    #edc_sum = edc_sum_1.values / (len(edc_sum_1.values))
-    #edc = xr.DataArray(edc_sum, coords={'energy': edc_sum_1['energy'].values}, dims=['energy'])
-    #run_edc_plot(edc)
-    #model, out, params = generate_fit(edc, -0.07, 0.3)
+    # cut = normed.sel({'photon_energy': 40}, method='nearest')
+    # edc_sum_1 = cut.sel({'energy': slice(-0.07, 0.3)}).sum('slit')
+    # edc_sum = edc_sum_1.values / (len(edc_sum_1.values))
+    # edc = xr.DataArray(edc_sum, coords={'energy': edc_sum_1['energy'].values}, dims=['energy'])
+    # run_edc_plot(edc)
+    # model, out, params = generate_fit(edc, -0.07, 0.3)
     # I use this to control the photon energy range used for dewarping
-    #dd = normed.sel({'photon_energy': slice(30, 48)})
-    #run_plot(dd)
-    #e0 = -0.2
-    #e1 = 0.2
-    #dx = 14
-    #ne = 2
-    #ef_guess = ef_guess_for_edc(dd, e0, e1, dx, ne)
-    #hv_dw = run_dewarp(dd, ef_guess, model, params)
-    #run_plot(hv_dw)
-    normed = transpose_maybe(normed, [0, 2, 1])
-    #full_kz = convert_3d_normal_emission(normed)
-    full_kz = convert_partial_3d_normal_emission(normed)#, num_x=700, num_z=700)
-    #run_2d_plot(full_kz.sel({"energy": 0}, method='nearest'))
+    # dd = normed.sel({'photon_energy': slice(30, 48)})
+    # run_plot(dd)
+    # e0 = -0.2
+    # e1 = 0.2
+    # dx = 14
+    # ne = 2
+    # ef_guess = ef_guess_for_edc(dd, e0, e1, dx, ne)
+    # hv_dw = run_dewarp(dd, ef_guess, model, params)
+    # run_plot(hv_dw)
+    full_kz = convert_partial_3d_normal_emission(normed)
+    #full_kz = convert_3d_normal_emission(normed)#, num_x=700, num_z=700)
+    # run_2d_plot(full_kz.sel({"energy": 0}, method='nearest'))
     run_plot(full_kz)
